@@ -1,0 +1,106 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
+class VideoUploadPage extends StatefulWidget {
+  const VideoUploadPage({super.key});
+
+  @override
+  State<VideoUploadPage> createState() => _VideoUploadPage();
+}
+
+class _VideoUploadPage extends State<VideoUploadPage> {
+  final TextEditingController _titleController = TextEditingController();
+  String? _uploadUrl;
+
+  Future<void> _createUploadSession(PlatformFile pickedFile) async {
+    final uri = Uri.parse("http://127.0.0.1:8000/api/upload-video/");
+    final request = http.MultipartRequest("POST", uri);
+
+    request.fields["title"] = _titleController.text;
+    request.fields["filename"] = pickedFile.name;
+    request.fields["size"] = pickedFile.size.toString();
+    request.fields["content_type"] = "video/mp4";
+
+    final response = await request.send();
+    final body = await response.stream.bytesToString();
+
+    if (response.statusCode == 201) {
+      final data = jsonDecode(body);
+      setState(() {
+        _uploadUrl = data["upload_url"];
+      });
+      print("Resumable upload URL: $_uploadUrl");
+    } else {
+      print("Error: ${response.statusCode} $body");
+    }
+  }
+
+  Future<void> _uploadToGCS(PlatformFile pickedFile) async {
+    if (_uploadUrl == null) return;
+
+    final request = http.Request("PUT", Uri.parse(_uploadUrl!));
+    request.headers["Content-Type"] = "video/mp4";
+
+    // Web → use bytes; Mobile/Desktop → use path
+    if (pickedFile.bytes != null) {
+      request.bodyBytes = pickedFile.bytes!;
+    } else if (pickedFile.path != null) {
+      request.bodyBytes = await File(pickedFile.path!).readAsBytes();
+    }
+
+    final response = await request.send();
+    if (response.statusCode == 200) {
+      print("Upload successful for ${pickedFile.name}");
+    } else {
+      print("Upload failed: ${response.statusCode}");
+    }
+  }
+
+  Future<void> _pickAndUpload() async {
+    FilePickerResult? result = await FilePicker.pickFiles(
+      type: FileType.video,
+      withData: true, // required for web
+      allowMultiple: true,
+    );
+
+    if (result != null && result.files.isNotEmpty) {
+      for (PlatformFile file in result.files) {
+        await _createUploadSession(file);
+        await _uploadToGCS(file);
+      }
+    } else {
+      print("User canceled the picker");
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("No video selected")));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("Upload Video(s)")),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            TextField(
+              controller: _titleController,
+              decoration: InputDecoration(labelText: "Video Title"),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _pickAndUpload,
+              child: const Text("Select & Upload Video(s)"),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+ 
